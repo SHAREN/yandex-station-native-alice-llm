@@ -23,8 +23,8 @@ import (
 	tts "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/events/tts_generate"
 	client "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/protocol/client"
 	server "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/protocol/server"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	"quasarbridge/internal/dialogue"
 	"quasarbridge/internal/sound"
@@ -241,6 +241,7 @@ func (n *Native) ExternalUserStop(source string) bool {
 }
 func (n *Native) Client(ctx context.Context, k websocket.MessageType, data []byte) error {
 	f := wire.Decode(data, wire.ClientToServer)
+	stockTraceClient(k, data, f)
 	if f.Client == nil {
 		if len(data) >= 4 {
 			streamID := binary.BigEndian.Uint32(data)
@@ -598,6 +599,7 @@ func (n *Native) findLocked(h *header.TEventHeader) (*nativeRequest, bool) {
 }
 func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byte) error {
 	f := wire.Decode(data, wire.ServerToClient)
+	stockTraceServer(k, data, f)
 	if f.Server == nil {
 		if len(data) >= 4 {
 			streamID := binary.BigEndian.Uint32(data)
