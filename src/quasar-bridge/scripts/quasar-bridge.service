@@ -1,0 +1,24 @@
+[Unit]
+Description=Selective Quasar voice bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=quasar-bridge
+Group=quasar-bridge
+WorkingDirectory=/opt/quasar-bridge
+EnvironmentFile=-/etc/quasar-bridge/runtime.env
+ExecStart=/opt/quasar-bridge/quasar-bridge -config /etc/quasar-bridge/config.json
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+LogsDirectory=quasar-bridge
+LogsDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

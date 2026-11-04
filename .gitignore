@@ -1,0 +1,48 @@
+# Sensitive data and configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+private/
+config.local.json
+runtime.local.json
+*.credentials.json
+
+# Device dumps, firmware, audio and built artifacts
+_tmp/
+**/_tmp/
+tmp/
+**/tmp/
+captures/
+dumps/
+*.pcap
+*.pcapng
+*.wav
+*.ogg
+*.mp3
+*.raw
+*.pcm
+*.bin
+*.img
+*.apk
+*.yap
+*.exe
+*.log
+
+# Caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+
+# Editors
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
