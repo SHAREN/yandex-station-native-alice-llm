@@ -176,7 +176,7 @@ func stockTraceServer(k websocket.MessageType, data []byte, f wire.Frame) {
 			switch f.Kind() {
 			case "TtsSpeak":
 				msg := e.GetTtsSpeak()
-				stockCaptureBegin(uint32(e.GetHeader().GetStreamId()), msg.GetFormat())
+				stockCaptureBegin(uint32(e.GetHeader().GetStreamId()), msg.GetFormat(), e.GetHeader().GetRefMessageId())
 				raw := msg.ProtoReflect().GetUnknown()
 				lazy, _ := stockProtoVarint(raw, 2)
 				chunk, _ := stockProtoVarint(raw, 6)
@@ -188,7 +188,7 @@ func stockTraceServer(k websocket.MessageType, data []byte, f wire.Frame) {
 				d := e.GetDeferredAliceResponse()
 				if b := d.GetBaseResponse(); b != nil {
 					voice, _ := stockProtoBytes(b.ProtoReflect().GetUnknown(), 2)
-					stockCaptureResponseText(d.GetResponsePartialNum(), b.GetText(), string(voice), d.GetIsLast())
+					stockCaptureResponseText(e.GetHeader().GetRefMessageId(), d.GetResponsePartialNum(), b.GetText(), string(voice), d.GetIsLast())
 				}
 				stockTraceRecord(map[string]any{"direction": "down", "kind": f.Kind(), "request": stockTraceID(e.GetHeader().GetRefMessageId())})
 			}

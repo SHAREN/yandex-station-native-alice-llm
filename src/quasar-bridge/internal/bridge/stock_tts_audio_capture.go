@@ -1,128 +1,147 @@
 package bridge
 
-// One-shot capture of ONLY server-side stock TTS audio (never microphone
-// audio). Activated explicitly for a physical junction investigation.
-// The file lives on tmpfs, is private, and is capped at 10 MiB.
+// Temporary, opt-in capture of Yandex cloud TTS playback for exact splice
+// analysis. NEVER records microphone or ASR. Audio/text remain private on
+// station tmpfs and are not sent to the repository or any external service.
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
-const stockOneShotSentinel = "/data/opt/quasar-bridge/enable-stock-tts-one-shot"
-const stockOneShotPath = "/tmp/stock-alice-tts-one-shot.ogg"
-const stockOneShotLimit = int64(10 << 20)
+const stockCaptureSentinel = "/data/opt/quasar-bridge/enable-stock-tts-multishot"
+const stockCaptureDir = "/tmp"
+const stockCaptureMaxResponses = 6
+const stockCapturePerReplyLimit = int64(6 << 20)
+const stockCaptureTotalLimit = int64(18 << 20)
+const stockCaptureTextLimit = int64(128 << 10)
 
-var stockOneShot = struct {
+type stockCaptureSession struct {
+	file    *os.File
+	path    string
+	bytes   int64
+	request string
+	index   int
+}
+
+var stockCapture = struct {
 	sync.Mutex
-	active   bool
-	finished bool
-	stream   uint32
-	bytes    int64
-	file     *os.File
-}{}
+	started    int
+	totalBytes int64
+	sessions   map[uint32]*stockCaptureSession
+}{sessions: make(map[uint32]*stockCaptureSession)}
 
-func stockCaptureBegin(stream uint32, format string) {
-	if !stockTTSEnabled() || stream == 0 || format != "audio/opus" {
+func stockCaptureEnabled() bool {
+	if !stockTTSEnabled() {
+		return false
+	}
+	_, err := os.Stat(stockCaptureSentinel)
+	return err == nil
+}
+
+func stockCaptureBegin(stream uint32, format, requestID string) {
+	if !stockCaptureEnabled() || stream == 0 || format != "audio/opus" {
 		return
 	}
-	if _, err := os.Stat(stockOneShotSentinel); err != nil {
+	stockCapture.Lock()
+	defer stockCapture.Unlock()
+	if stockCapture.started >= stockCaptureMaxResponses || stockCapture.totalBytes >= stockCaptureTotalLimit {
 		return
 	}
-	stockOneShot.Lock()
-	defer stockOneShot.Unlock()
-	if stockOneShot.active || stockOneShot.finished {
+	if _, exists := stockCapture.sessions[stream]; exists {
 		return
 	}
-	f, err := os.OpenFile(stockOneShotPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	next := stockCapture.started + 1
+	path := filepath.Join(stockCaptureDir, fmt.Sprintf("stock-alice-splice-%02d-stream-%d.ogg", next, stream))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		slog.Warn("stock_tts_capture_unavailable", "error", err)
 		return
 	}
-	stockOneShot.active = true
-	stockOneShot.stream = stream
-	stockOneShot.file = f
-	stockTraceRecord(map[string]any{"kind": "capture_started", "stream": stream})
+	stockCapture.started = next
+	stockCapture.sessions[stream] = &stockCaptureSession{
+		file: file, path: path, request: requestID, index: next,
+	}
+	stockTraceRecord(map[string]any{"kind": "capture_started", "stream": stream, "capture": next, "request": stockTraceID(requestID)})
 }
 
 func stockCaptureChunk(stream uint32, raw []byte) {
 	if len(raw) == 0 {
 		return
 	}
-	stockOneShot.Lock()
-	defer stockOneShot.Unlock()
-	if !stockOneShot.active || stockOneShot.stream != stream || stockOneShot.file == nil {
+	stockCapture.Lock()
+	defer stockCapture.Unlock()
+	part := stockCapture.sessions[stream]
+	if part == nil || part.file == nil {
 		return
 	}
-	if stockOneShot.bytes+int64(len(raw)) > stockOneShotLimit {
-		_ = stockOneShot.file.Close()
-		stockOneShot.file = nil
-		stockOneShot.active = false
-		stockOneShot.finished = true
-		stockTraceRecord(map[string]any{"kind": "capture_truncated", "stream": stream, "bytes": stockOneShot.bytes})
+	if part.bytes+int64(len(raw)) > stockCapturePerReplyLimit ||
+		stockCapture.totalBytes+int64(len(raw)) > stockCaptureTotalLimit {
+		_ = part.file.Close()
+		part.file = nil
+		stockTraceRecord(map[string]any{"kind": "capture_truncated", "stream": stream, "capture": part.index, "bytes": part.bytes})
 		return
 	}
-	n, err := stockOneShot.file.Write(raw)
-	stockOneShot.bytes += int64(n)
-	if err != nil {
+	n, err := part.file.Write(raw)
+	part.bytes += int64(n)
+	stockCapture.totalBytes += int64(n)
+	if err != nil || n != len(raw) {
 		slog.Warn("stock_tts_capture_write_failed", "error", err)
-		_ = stockOneShot.file.Close()
-		stockOneShot.file = nil
-		stockOneShot.active = false
-		stockOneShot.finished = true
+		_ = part.file.Close()
+		part.file = nil
 	}
 }
 
-// The spoken text of this one controlled test is stored separately so an
-// extracted audio segment can be matched to exact words. No ASR input is stored.
-func stockCaptureResponseText(part uint32, text, voice string, last bool) {
-	if _, err := os.Stat(stockOneShotSentinel); err != nil {
+// Only response text from Yandex's DeferredAliceResponse events is retained,
+// never the user's spoken request. The pseudonym links a response to its audio
+// capture. Text can arrive immediately before TtsSpeak.
+func stockCaptureResponseText(requestID string, part uint32, text, voice string, last bool) {
+	if !stockCaptureEnabled() || (text == "" && voice == "") {
 		return
 	}
-	if text == "" && voice == "" {
-		return
+	record := map[string]any{
+		"at":      time.Now().UTC().Format(time.RFC3339Nano),
+		"request": stockTraceID(requestID),
+		"part":    part, "last": last, "text": text, "voice": voice,
 	}
-	stockOneShot.Lock()
-	defer stockOneShot.Unlock()
-	if stockOneShot.finished {
-		return
-	}
-	record := map[string]any{"at": time.Now().UTC().Format(time.RFC3339Nano), "part": part, "last": last, "text": text, "voice": voice}
 	encoded, err := json.Marshal(record)
-	if err != nil {
+	if err != nil || len(encoded) > 16384 {
 		return
 	}
-	if len(encoded) > 16384 {
-		return
-	}
-	path := "/tmp/stock-alice-tts-one-shot-text.jsonl"
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	stockCapture.Lock()
+	defer stockCapture.Unlock()
+	file, err := os.OpenFile(filepath.Join(stockCaptureDir, "stock-alice-splice-response-text.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return
 	}
 	defer file.Close()
-	if info, err := file.Stat(); err == nil && info.Size() > 131072 {
+	if info, err := file.Stat(); err == nil && info.Size()+int64(len(encoded)+1) > stockCaptureTextLimit {
 		return
 	}
 	_, _ = file.Write(append(encoded, '\n'))
 }
 
 func stockCaptureEnd(stream uint32) {
-	stockOneShot.Lock()
-	defer stockOneShot.Unlock()
-	if !stockOneShot.active || stockOneShot.stream != stream {
+	stockCapture.Lock()
+	defer stockCapture.Unlock()
+	part := stockCapture.sessions[stream]
+	if part == nil {
 		return
 	}
-	if stockOneShot.file != nil {
-		if err := stockOneShot.file.Sync(); err != nil {
+	if part.file != nil {
+		if err := part.file.Sync(); err != nil {
 			slog.Warn("stock_tts_capture_sync_failed", "error", err)
 		}
-		_ = stockOneShot.file.Close()
-		stockOneShot.file = nil
+		_ = part.file.Close()
+		part.file = nil
 	}
-	stockOneShot.active = false
-	stockOneShot.finished = true
-	stockTraceRecord(map[string]any{"kind": "capture_completed", "stream": stream, "bytes": stockOneShot.bytes})
+	delete(stockCapture.sessions, stream)
+	stockTraceRecord(map[string]any{
+		"kind": "capture_completed", "capture": part.index, "stream": stream,
+		"request": stockTraceID(part.request), "bytes": part.bytes,
+	})
 }
