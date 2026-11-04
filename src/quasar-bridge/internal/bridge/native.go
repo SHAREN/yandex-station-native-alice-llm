@@ -629,6 +629,13 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 				}
 			}
 			drop := n.blocked[streamID] != nil || (p != nil && p.canceled)
+			if p != nil && p.nativeTextStream && !drop {
+				// Native UniProxy has already generated a complete, valid
+				// Opus/Ogg stream. No legacy Ogg remix, artificial segment
+				// boundaries, retained packets, or guessed timing.
+				n.mu.Unlock()
+				return n.down(ctx, k, data)
+			}
 			if p != nil && p.streaming && !drop {
 				out, err := p.audio.feed(data[4:])
 				if err == nil && len(out) > 0 {
@@ -679,6 +686,17 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 			if p.canceled {
 				n.mu.Unlock()
 				return nil
+			}
+			if p.nativeTextStream && sc.GetClose() != nil {
+				// The native TTS server owns Ogg EOS and packet boundaries.
+				// Forward exactly one close without touching oggSpeech.
+				sc.MessageId = p.id
+				n.mu.Unlock()
+				out, err := f.Marshal()
+				if err != nil {
+					return err
+				}
+				return n.down(ctx, k, out)
 			}
 			if p.streaming && sc.GetClose() != nil {
 				if err := p.audio.endSource(); err != nil {
@@ -779,17 +797,28 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 					n.mu.Unlock()
 					return errors.New("streaming progress requires Opus")
 				}
-				if p.nativeTextStream && p.audioStarted {
-					if uint32(e.Header.GetStreamId()) != p.audioStream {
+				if p.nativeTextStream {
+					if p.audioStarted {
+						if uint32(e.Header.GetStreamId()) != p.audioStream {
+							n.mu.Unlock()
+							return errors.New("native incremental TTS unexpected additional audio stream")
+						}
+						// Repeated directive for the SAME native TTS stream
+						// must never restart the station's audio player.
 						n.mu.Unlock()
-						return errors.New("native incremental TTS unexpected additional audio stream")
+						return nil
 					}
-					// The server may send several TTS directives for the same
-					// streaming source. Never reinitialize Ogg headers/audio.
+					p.audioStream = uint32(e.Header.GetStreamId())
+					p.audioStarted = true
+					slog.Info("native_tts_passthrough_started", "request", requestTag(p.id), "stream", p.audioStream)
 					n.mu.Unlock()
-					return nil
+					out, err := f.Marshal()
+					if err != nil {
+						return err
+					}
+					return n.down(ctx, k, out)
 				}
-				p.audioIsProgress = !p.nativeTextStream && p.ttsID == p.progressTTS
+				p.audioIsProgress = p.ttsID == p.progressTTS
 				p.audio.next()
 				p.audio.source.discardAudio = p.audioIsProgress && p.discardProgressAudio
 				if p.audioStarted {
@@ -1102,7 +1131,10 @@ func (n *Native) synthesize(p *nativeRequest, text string) error {
 	}
 	n.mu.Unlock()
 	if p.nativeTextStream {
-		text = strings.TrimSpace(text) + " "
+		// The first text in an IsStreaming TtsGenerate is ignored by
+		// Yandex UniProxy. All spoken text MUST be sent with
+		// DeferredTtsGenerate, including the first character.
+		text = ""
 	}
 	t := &client.TClientMessage{Message: &client.TClientMessage_Event{Event: &client.TClientMessage_TEvent{Header: &header.TEventHeader{MessageId: p.ttsID}, Event: &client.TClientMessage_TEvent_TtsGenerate{TtsGenerate: &tts.TTtsGenerate{Text: new(text), Lang: new("ru-RU"), Format: new("audio/opus")}}}}}
 	if p.nativeTextStream {

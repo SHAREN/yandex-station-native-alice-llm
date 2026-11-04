@@ -162,8 +162,8 @@ func TestNativeTTSOneSessionIncrementalBeforeLLMCompletes(t *testing.T) {
 			f := wire.Decode(raw,wire.ClientToServer)
 			if f.Kind()=="TtsGenerate" {
 				ts:=f.Client.GetEvent().GetTtsGenerate()
-				if !strings.Contains(ts.GetText(),"Григорий.") {
-					t.Fatalf("first TTS text=%q",ts.GetText())
+				if ts.GetText() != "" {
+					t.Fatalf("streaming TtsGenerate must have EMPTY text; initial text is ignored by Yandex: %q",ts.GetText())
 				}
 				got:=ts.ProtoReflect().GetUnknown()
 				n,kind,step:=protowire.ConsumeTag(got)
@@ -180,15 +180,29 @@ func TestNativeTTSOneSessionIncrementalBeforeLLMCompletes(t *testing.T) {
 			t.Fatal("first native TtsGenerate never appeared")
 		}
 	}
-	// The first request has already been sent while the LLM is blocked.
+	// The LLM is paused after its first delta. The FIRST spoken words must
+	// already be on the wire via DeferredTtsGenerate, not TtsGenerate.Text.
+	var chunks []inspectedDeferredTTS
+	for len(chunks)==0 {
+		select {
+		case raw:=<-up:
+			if c,ok:=parseDeferredTTS(t,raw);ok {
+				chunks=append(chunks,c)
+			}
+		case <-ctx.Done():
+			t.Fatal("first deferred TTS delta was not sent before the model completed")
+		}
+	}
+	if !strings.Contains(chunks[0].text,"Жил-был часовщик Григорий.") || chunks[0].chunk!=1 || chunks[0].isLast!=0 {
+		t.Fatalf("opening words were lost or incorrectly finalized: %+v",chunks[0])
+	}
 	select{
 	case <-answerDone:
-		t.Fatal("LLM completed before first native TTS request")
+		t.Fatal("LLM completed before first deferred TTS request")
 	default:
 	}
 	close(release)
-	var chunks []inspectedDeferredTTS
-	for len(chunks)<3 {
+	for chunks[len(chunks)-1].isLast!=1 {
 		select{
 		case raw:=<-up:
 			if c,ok:=parseDeferredTTS(t,raw);ok {
@@ -200,14 +214,24 @@ func TestNativeTTSOneSessionIncrementalBeforeLLMCompletes(t *testing.T) {
 			t.Fatalf("missing deferred TTS chunks: %v",chunks)
 		}
 	}
-	if chunks[0].requestID!=firstID||chunks[1].requestID!=firstID||chunks[2].requestID!=firstID {
-		t.Fatalf("deferred chunks not correlated to initial TTS request: %+v",chunks)
+	var spoken strings.Builder
+	for i,c:=range chunks {
+		if c.requestID!=firstID || c.chunk!=uint64(i+1) {
+			t.Fatalf("deferred request correlation/order broken: %+v",chunks)
+		}
+		if i!=len(chunks)-1 && c.isLast!=0 {
+			t.Fatalf("premature IsLast: %+v",chunks)
+		}
+		if i==len(chunks)-1 {
+			if c.text!="" || c.isLast!=1 {
+				t.Fatalf("last chunk must only close the session: %+v",c)
+			}
+			continue
+		}
+		spoken.WriteString(c.text)
 	}
-	if chunks[0].chunk!=1||chunks[0].isLast!=0||chunks[1].chunk!=2||chunks[1].isLast!=0||chunks[2].chunk!=3||chunks[2].isLast!=1||chunks[2].text!="" {
-		t.Fatalf("incorrect order/end sequence %+v",chunks)
-	}
-	if !strings.Contains(chunks[0].text,"Он нашёл часы.")||!strings.Contains(chunks[1].text,"А потом случилось чудо.") {
-		t.Fatalf("unexpected streamed text %+v",chunks)
+	if got,want:=spoken.String(),"Жил-был часовщик Григорий. Он нашёл часы. А потом случилось чудо.";got!=want {
+		t.Fatalf("native text stream altered or dropped bytes: got %q want %q",got,want)
 	}
 	select {
 	case err:=<-answerDone:

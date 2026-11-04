@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 	client "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/protocol/client"
@@ -58,12 +58,8 @@ func (n *Native) sendNativeTTSChunk(p *nativeRequest, text string, last bool) er
 	index := p.nativeTextChunk
 	id := p.ttsID
 	n.mu.Unlock()
-	// Nonfinal pieces include a space; otherwise the cloud might concatenate
-	// the final word of one chunk and the first word of the next.
-	text = strings.TrimSpace(text)
-	if !last && text != "" {
-		text += " "
-	}
+	// IMPORTANT: Preserve all characters, including spaces. Stream deltas
+	// can start/end inside a word, and trimming would corrupt speech.
 	b, err := nativeDeferredTTSFrame(id, text, index, last)
 	if err != nil {
 		return err
@@ -91,59 +87,101 @@ func (n *Native) appendNativeStreamedReply(p *nativeRequest, text string) error 
 	return n.sendNativeTTSChunk(p, text, false)
 }
 
-// The LLM returns first completed sentence/clause immediately, then
-// progressively supplies more text while the Yandex server synthesizes the
-// SAME TTS session. No synthetic 60%-timer or extra TtsGenerate is needed.
+// The native streaming mode deliberately does NOT use streamedSentenceBuffer,
+// runPrefetchWorker, or the legacy multi-synthesis audio stitcher. It streams
+// *all* model text via DeferredTtsGenerate into ONE stock Yandex TTS session.
+// Batching adjacent raw deltas here is only transport backpressure; no text
+// is omitted and no separate native TtsGenerate is created for a sentence.
 func (n *Native) streamSpeechNative(p *nativeRequest, prompt string, provider StreamingFallbackResolver) (Resolution, error) {
-	segments := make(chan string, 64)
-	workerDone := make(chan struct{})
-	var workerErr error
-	started := time.Now()
-	go func() {
-		defer close(workerDone)
-		first := true
-		for text := range segments {
-			if err := p.ctx.Err(); err != nil {
-				workerErr = err
-				return
-			}
-			if first {
-				workerErr = n.beginNativeStreamedReply(p, text)
-				first = false
-			} else {
-				workerErr = n.appendNativeStreamedReply(p, text)
-			}
-			if workerErr != nil {
-				return
-			}
-			slog.Info("native_stream_chunk_submitted", "request", requestTag(p.id), "elapsed_ms", time.Since(started).Milliseconds())
+	const minBatchRunes = 16
+	const maxBatchRunes = 128
+	var pending, received string
+	started := false
+	chunks := 0
+	ensureStarted := func() error {
+		if started {
+			return nil
 		}
-	}()
-	var buffer streamedSentenceBuffer
-	result, err := provider.FallbackStream(p.ctx, prompt, func(delta string) error {
-		return buffer.feed(delta, func(text string) error {
-			select {
-			case <-p.ctx.Done():
-				return p.ctx.Err()
-			case <-workerDone:
-				if workerErr != nil {
-					return workerErr
+		if err := n.beginNativeStreamedReply(p, ""); err != nil {
+			return err
+		}
+		started = true
+		return nil
+	}
+	submit := func(text string) error {
+		if text == "" {
+			return nil
+		}
+		if err := ensureStarted(); err != nil {
+			return err
+		}
+		if err := n.appendNativeStreamedReply(p, text); err != nil {
+			return err
+		}
+		chunks++
+		return nil
+	}
+	accept := func(delta string) error {
+		if err := p.ctx.Err(); err != nil {
+			return err
+		}
+		if delta == "" {
+			return nil
+		}
+		received += delta
+		pending += delta
+		for utf8.RuneCountInString(pending) >= minBatchRunes {
+			// Batch only on an existing whitespace boundary. This does NOT
+			// impose an artificial end of sentence or new synthesis.
+			cut := strings.LastIndexAny(pending, " \r\n\t")
+			if cut < 0 {
+				if utf8.RuneCountInString(pending) < maxBatchRunes {
+					break
 				}
-				return context.Canceled
-			case segments <- text:
-				return nil
+				// Never split a UTF-8 rune merely to satisfy a byte
+				// limit: the protocol accepts the entire pending delta.
+				cut = len(pending) - 1
 			}
-		})
-	})
-	close(segments)
-	<-workerDone
-	if workerErr != nil && err == nil {
-		err = workerErr
+			part := pending[:cut+1]
+			if err := submit(part); err != nil {
+				return err
+			}
+			pending = pending[cut+1:]
+		}
+		return nil
 	}
-	if err == nil {
-		result.Answer = buffer.remaining(result.Answer)
+	result, err := provider.FallbackStream(p.ctx, prompt, accept)
+	if err != nil {
+		return result, err
 	}
-	return result, err
+	// Some resolvers provide the complete answer only at return time;
+	// others may have a final suffix not previously emitted as deltas.
+	if received == "" {
+		if err := accept(result.Answer); err != nil {
+			return result, err
+		}
+	} else if strings.HasPrefix(result.Answer, received) {
+		if err := accept(result.Answer[len(received):]); err != nil {
+			return result, err
+		}
+	} else if result.Answer != "" && result.Answer != received {
+		slog.Warn("native_stream_provider_text_mismatch", "received_bytes", len(received), "final_bytes", len(result.Answer))
+	}
+	if err := submit(pending); err != nil {
+		return result, err
+	}
+	// A model producing no text still needs a deterministic final response.
+	if !started {
+		if err := ensureStarted(); err != nil {
+			return result, err
+		}
+	}
+	slog.Info("native_stream_complete", "request", requestTag(p.id),
+		"native_chunks", chunks, "text_bytes", len(received))
+	// All text was already sent via DeferredTtsGenerate. The ordinary
+	// completion callback sends only IsLast=true with empty text.
+	result.Answer = ""
+	return result, nil
 }
 
 // The final streaming answer must NOT wait for the TTS stream to close:

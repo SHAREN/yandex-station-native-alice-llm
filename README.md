@@ -58,7 +58,7 @@ bash tools/go-cross-build.sh src/quasar-bridge _tmp/quasar-bridge-native-arm64 .
 
 ## Текущее состояние
 
-На колонке установлен Quasar Bridge **0.4.5e** с включённым native streaming TTS. Предыдущая 0.4.5d сохранена для отката. Полные тесты прошли; проверка длинного рассказа человеком на слух остаётся отдельным критерием приёмки.
+На колонке установлен Quasar Bridge **0.4.5f** с исправленным native streaming TTS: **весь текст с первого символа** поступает через `DeferredTtsGenerate` в одну сессию; старые независимые синтезы и Ogg-склейка при включённом флаге не используются. Предыдущая 0.4.5e сохранена для отката. Тесты прошли; физическая прослушка остаётся критерием приёмки. [Разбор пропуска начала речи](docs/NATIVE_TTS_STREAMING_BUGFIX_20261104.md).
 
 Подробности: [CURRENT_STATE](docs/CURRENT_STATE.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [REPOSITORY_SEPARATION](docs/REPOSITORY_SEPARATION.md), [NATIVE_TTS_CUTOVER](docs/NATIVE_TTS_CUTOVER_20261104.md).
 
