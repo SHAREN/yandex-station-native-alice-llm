@@ -176,17 +176,26 @@ func stockTraceServer(k websocket.MessageType, data []byte, f wire.Frame) {
 			switch f.Kind() {
 			case "TtsSpeak":
 				msg := e.GetTtsSpeak()
+				stockCaptureBegin(uint32(e.GetHeader().GetStreamId()), msg.GetFormat())
 				raw := msg.ProtoReflect().GetUnknown()
 				lazy, _ := stockProtoVarint(raw, 2)
 				chunk, _ := stockProtoVarint(raw, 6)
 				sub, _ := stockProtoVarint(raw, 7)
 				stockTraceRecord(map[string]any{"direction": "down", "kind": "TtsSpeak", "request": stockTraceID(e.GetHeader().GetRefMessageId()), "stream": e.GetHeader().GetStreamId(), "format": msg.GetFormat(), "lazy_tts_streaming": lazy == 1, "sound_chunk_type": chunk, "substream_id": sub})
-			case "AliceResponse", "DeferredAliceResponse":
+			case "AliceResponse":
+				stockTraceRecord(map[string]any{"direction": "down", "kind": f.Kind(), "request": stockTraceID(e.GetHeader().GetRefMessageId())})
+			case "DeferredAliceResponse":
+				d := e.GetDeferredAliceResponse()
+				if b := d.GetBaseResponse(); b != nil {
+					voice, _ := stockProtoBytes(b.ProtoReflect().GetUnknown(), 2)
+					stockCaptureResponseText(d.GetResponsePartialNum(), b.GetText(), string(voice), d.GetIsLast())
+				}
 				stockTraceRecord(map[string]any{"direction": "down", "kind": f.Kind(), "request": stockTraceID(e.GetHeader().GetRefMessageId())})
 			}
 			return
 		}
 		if sc := f.Server.GetStreamControl(); sc != nil && sc.GetClose() != nil {
+			stockCaptureEnd(uint32(sc.GetStreamId()))
 			stockTraceRecord(map[string]any{"direction": "down", "kind": "StreamClose", "stream": sc.GetStreamId(), "request": stockTraceID(sc.GetMessageId()), "reason": sc.GetClose().GetReason().String()})
 			return
 		}
@@ -232,6 +241,7 @@ func stockTraceOggAudio(data []byte) {
 	if len(raw) == 0 {
 		return
 	}
+	stockCaptureChunk(stream, raw)
 	stockTTSRecorder.Lock()
 	defer stockTTSRecorder.Unlock()
 	info := stockTTSRecorder.audio[stream]
