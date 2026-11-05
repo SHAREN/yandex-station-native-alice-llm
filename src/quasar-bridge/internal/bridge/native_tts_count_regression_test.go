@@ -14,7 +14,7 @@ import (
 // Regression: Yandex ignores TtsGenerate.Text when IsStreaming is true.
 // All spoken words, starting at "Один", MUST travel in DeferredTtsGenerate
 // on one request. Chunk boundaries must not lose words or punctuation.
-func TestNativeTTSCountingAllNumbersWithoutSentenceSplits(t *testing.T) {
+func TestNativeTTSCountingUsesOnlyOpeningClauseAndRemainingSentence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Second)
 	defer cancel()
 	words := []string{
@@ -27,7 +27,7 @@ func TestNativeTTSCountingAllNumbersWithoutSentenceSplits(t *testing.T) {
 	complete := strings.Join(words, "")
 	provider := scriptedNativeStreamingResolver{send: func(_ context.Context, _ string, accept func(string) error) (Resolution, error) {
 		for _, text := range words {
-			// No sentence boundary before the final number.
+			// No sentence-ending period before the final number; the opening comma is an allowed first pause.
 			if err := accept(text); err != nil {
 				return Resolution{}, err
 			}
@@ -66,7 +66,7 @@ func TestNativeTTSCountingAllNumbersWithoutSentenceSplits(t *testing.T) {
 			if f.Client.GetEvent().GetTtsGenerate().GetText() != "" {
 				t.Fatalf("native streaming bootstrap must be empty: %q", f.Client.GetEvent().GetTtsGenerate().GetText())
 			}
-		} else if c,ok := parseDeferredTTS(t, data); ok {
+		} else if c, ok := parseDeferredTTS(t, data); ok {
 			chunks = append(chunks, c)
 		}
 	}
@@ -74,7 +74,7 @@ func TestNativeTTSCountingAllNumbersWithoutSentenceSplits(t *testing.T) {
 		t.Fatalf("expected one TtsGenerate; got %d", tss)
 	}
 	var spoken strings.Builder
-	for i,c := range chunks {
+	for i, c := range chunks {
 		if c.requestID != id || c.chunk != uint64(i+1) {
 			t.Fatalf("bad incremental request/order: %+v", c)
 		}
@@ -95,7 +95,10 @@ func TestNativeTTSCountingAllNumbersWithoutSentenceSplits(t *testing.T) {
 	if !strings.HasPrefix(spoken.String(), "Один, два") || !strings.HasSuffix(spoken.String(), "тридцать.") {
 		t.Fatal("beginning or end of the count is missing")
 	}
-	if len(chunks) < 3 {
-		t.Fatalf("streaming did not advance incrementally: %d chunks", len(chunks))
+	if len(chunks) != 3 {
+		t.Fatalf("counting must use one opening clause plus full remaining sentence and IsLast: %+v", chunks)
+	}
+	if !strings.HasSuffix(chunks[0].text, ",") || !strings.HasSuffix(chunks[1].text, "тридцать.") {
+		t.Fatalf("unexpected counting phrase boundaries: %+v", chunks)
 	}
 }

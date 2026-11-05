@@ -97,7 +97,7 @@ func TestQuasarStreamedStoryBatchesFourSentencesWithoutClosingBetween(t *testing
 		Header: &header.TEventHeader{MessageId: "four-segments", StreamId: new(int64(12))},
 		Event: &client.TClientMessage_TEvent_VoiceInput{VoiceInput: &request.TAliceRequestProto{
 			Request: &request.TAliceRequestProto_TRequest{Event: &common.TEvent{Type: common.EEventType_voice_input.Enum()}},
-			Format: new("audio/opus"),
+			Format:  new("audio/opus"),
 		}},
 	}}})
 	if err := n.Client(ctx, websocket.MessageBinary, voice); err != nil {
@@ -169,8 +169,8 @@ func TestQuasarStreamedStoryBatchesFourSentencesWithoutClosingBetween(t *testing
 		requestCount++
 		feedSpeech(t, n, next.Client.GetEvent().GetHeader().GetMessageId(), uint32(500+requestCount), false)
 	}
-	if requestCount < 3 || requestCount > 4 {
-		t.Fatalf("four sentences should use 3–4 TTS requests, got %d", requestCount)
+	if requestCount != 4 {
+		t.Fatalf("four sentences must use exactly four TTS requests, got %d", requestCount)
 	}
 	select {
 	case <-complete:

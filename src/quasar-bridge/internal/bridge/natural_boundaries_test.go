@@ -68,7 +68,7 @@ func TestNaturalPauseLaterVeryLongSentenceUsesCommaNotWordBoundary(t *testing.T)
 	if err := b.feed("Вот начало. ", emit); err != nil {
 		t.Fatal(err)
 	}
-	front := strings.Repeat("когда за окном медленно проходили облака и ветер гудел ", 4) + ","
+	front := strings.Repeat("когда за окном медленно проходили облака и ветер гудел ", 13) + ","
 	back := strings.Repeat(" потом герой продолжал свой рассказ ", 4)
 	if err := b.feed(front, emit); err != nil {
 		t.Fatal(err)

@@ -26,14 +26,14 @@ func TestSpeechPrefetchDelayAndEstimation(t *testing.T) {
 	}
 }
 
-func TestSpeechBatchCountTwoSentencesWhenReady(t *testing.T) {
+func TestSpeechBatchCountPreservesOneSentencePerTTSChunk(t *testing.T) {
 	testCases := []struct {
 		ready []string
 		want  int
 	}{
 		{[]string{}, 0},
 		{[]string{"Коротко."}, 1},
-		{[]string{"Первое.", "Второе."}, 2},
+		{[]string{"Первое.", "Второе."}, 1},
 		{[]string{strings.Repeat("а", 190), strings.Repeat("б", 90)}, 1},
 	}
 	for _, tc := range testCases {
@@ -51,12 +51,12 @@ func TestPacingStartsNextImmediatelyForTinyFirstSentence(t *testing.T) {
 
 func TestSynthesizedOpusDurationCalibratesSpeechRate(t *testing.T) {
 	p := &nativeRequest{
-		id: "measurement-test",
+		id:           "measurement-test",
 		ttsTextRunes: 140,
-		ttsOrdinal: 1,
-		ttsSentAt: time.Now().Add(-3 * time.Second),
-		ttsSpeakAt: time.Now().Add(-2 * time.Second),
-		audio: oggSpeech{source: &oggSource{samples: 480000}},
+		ttsOrdinal:   1,
+		ttsSentAt:    time.Now().Add(-3 * time.Second),
+		ttsSpeakAt:   time.Now().Add(-2 * time.Second),
+		audio:        oggSpeech{source: &oggSource{samples: 480000}},
 	}
 	recordSynthesizedSpeechLocked(p)
 	if got := p.speechCharsPerSecond; got < 13.99 || got > 14.01 {

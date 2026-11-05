@@ -13,8 +13,7 @@ const (
 	// Yandex Alice TTS speed. Real output Opus duration is logged separately.
 	initialSpeechCharsPerSecond = 14.0
 	speechPrefetchReserve       = 3 * time.Second
-	speechBatchMaxRunes         = 220
-	speechBatchMaxSentences     = 2
+	speechBatchMaxSentences     = 1
 )
 
 // estimatedSpeechDuration is a temporary estimate until a station supplies
@@ -47,18 +46,11 @@ func speechPrefetchDelay(duration time.Duration) time.Duration {
 	return atSixty
 }
 
-// Choose 1–2 finished sentences available *at the moment of prefetch*.
-// Two short sentences are combined to reduce per-request TTS overhead.
+// Choose one complete sentence (or first opening clause) per stock TTS request.
+// The backup synthesis path must also preserve one natural phrase per TTS request.
 func speechBatchCount(ready []string) int {
 	if len(ready) == 0 {
 		return 0
-	}
-	if len(ready) == 1 {
-		return 1
-	}
-	count := utf8.RuneCountInString(ready[0]) + utf8.RuneCountInString(ready[1]) + 1
-	if speechBatchMaxSentences >= 2 && count <= speechBatchMaxRunes {
-		return 2
 	}
 	return 1
 }
@@ -70,7 +62,7 @@ func speechJoin(ready []string) string {
 // runPrefetchWorker starts the first fully generated sentence immediately.
 // While it is being spoken, additional sentences accumulate in the channel.
 // At 60% estimated playback (or 3 seconds before its end, whichever is
-// earlier), the next available one/two sentences are sent to the existing
+// earlier), the next available complete sentence is sent to the existing
 // stock TtsGenerate API. appendStreamedReply keeps the native Opus stream
 // serial and does not overlap voices, even if the backend TTS stream is slow.
 func (n *Native) runPrefetchWorker(p *nativeRequest, segments <-chan string, started time.Time) error {
@@ -165,4 +157,3 @@ func (n *Native) runPrefetchWorker(p *nativeRequest, segments <-chan string, sta
 			"next_prefetch_ms", delay.Milliseconds(), "queued_sentences", len(ready))
 	}
 }
-
