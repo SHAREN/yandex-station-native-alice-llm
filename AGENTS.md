@@ -18,5 +18,10 @@ Before adding a feature inspect the physical firmware/protocol for existing impl
 - Windows/WSL: use tools/go-cross-build.sh for ARM64 Linux build. Go module is under src/quasar-bridge.
 - Never create/start/resume/steer Codex Threads without explicit authorization from the user in the current message.
 
+## Conversation journal for agents
+- To inspect real dialogue history, use the **read-only** `tools/alice-journal.cmd --last 20` on native Windows; add `--json` to pass structured results to another agent. Script: `tools/alice_journal_report.py`; on WSL it supports `--stdin` from the existing `alice-room` helper. Never publish raw conversations in Git.
+- Existing speaker-side ring buffer is ~3 MB (1 MB current + 2 backups), **not a guaranteed 30-day archive**. Fastcommands without wake-word are not yet part of the Quasar JSONL; never infer their frequency from that file alone.
+- Fast home intent research is documented in `docs/FAST_HOME_INTENTS_RESEARCH_20261106.md`; the real private Home Assistant entity mapping is in local Home PC `runbooks/yandex-stations/LOCAL_FAST_HOME_INTENTS_20261106.md`, not this public repo. Do not deploy new command routes without tests and a separate production approval.
+
 ## Documentation
 Update docs/CURRENT_STATE.md for the actual installed state, docs/ARCHITECTURE.md for system changes, and docs/REPOSITORY_SEPARATION.md if ownership or remotes change.
