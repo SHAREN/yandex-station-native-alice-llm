@@ -201,5 +201,5 @@ func (a *Agent) allowedAfterHistory(name string) bool {
 	if policy, ok := a.Tools.(interface{ AllowedAfterHistory(string) bool }); ok {
 		return policy.AllowedAfterHistory(name)
 	}
-	return name != "read_webpage" && name != "play_sound" && name != "play_music" && !strings.HasPrefix(name, "mcp__")
+	return name != "web_search" && name != "read_webpage" && name != "play_sound" && name != "play_music" && !strings.HasPrefix(name, "mcp__")
 }

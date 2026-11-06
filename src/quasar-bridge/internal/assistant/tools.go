@@ -6,8 +6,10 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
+	"quasarbridge/internal/assistant/searchrouter"
 	"quasarbridge/internal/dialogue"
 	"quasarbridge/internal/journal"
 	"quasarbridge/internal/llm"
@@ -15,6 +17,8 @@ import (
 )
 
 type Tools struct {
+	searchOnce    sync.Once
+	SearchRouter  *searchrouter.Router // Optional injection for tests. No keys in config/logs.
 	Config        Config
 	JournalConfig func() journal.Config
 	WebReader     *WebReader
@@ -29,6 +33,9 @@ func (t *Tools) Definitions() []llm.Tool {
 	var tools []llm.Tool
 	if t.Config.Web {
 		tools = append(tools, definition("read_webpage", "Прочитать публичную HTTP/HTTPS страницу по URL. Возвращает текст без JavaScript. Не является поиском в интернете.", map[string]any{"url": map[string]string{"type": "string"}}, []string{"url"}))
+	}
+	if t.canSearch() {
+		tools = append(tools, webSearchDefinition())
 	}
 	if t.Config.History {
 		tools = append(tools, definition("search_history", "Поиск сохранённых запросов колонки и доставленных ответов. query — ключевые слова (все должны встретиться), пустая строка — последние запросы. since/until — необязательные RFC3339 (until не включительно), limit от 1 до 20. Результаты от новых к старым.", map[string]any{"query": map[string]string{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20}, "since": map[string]string{"type": "string"}, "until": map[string]string{"type": "string"}}, []string{"query"}))
@@ -64,6 +71,8 @@ func (t *Tools) Call(ctx context.Context, name, args string) (any, error) {
 			return nil, errors.New("read_webpage requires a URL")
 		}
 		return t.WebReader.Read(ctx, p.URL)
+	case name == "web_search" && t.canSearch():
+		return t.webSearch(ctx, args)
 	case name == "search_history" && t.Config.History:
 		var p HistoryQuery
 		if json.Unmarshal([]byte(args), &p, json.RejectUnknownMembers(true)) != nil {

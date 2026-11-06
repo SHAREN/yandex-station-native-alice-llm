@@ -13,6 +13,7 @@ type Config struct {
 	MCPServers       []MCPServerConfig `json:"mcp_servers,omitempty"`
 	Enabled          bool              `json:"enabled"`
 	Web              bool              `json:"web"`
+	Search           bool              `json:"search"`
 	History          bool              `json:"history"`
 	Time             bool              `json:"time"`
 	PlaySound        bool              `json:"play_sound"`
