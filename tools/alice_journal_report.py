@@ -11,6 +11,7 @@ from collections import Counter, OrderedDict
 from datetime import datetime, timedelta, timezone
 import json
 import re
+import statistics
 from pathlib import Path
 import subprocess
 import sys
@@ -99,11 +100,31 @@ def summarize(records: list[dict], skipped: int = 0) -> dict:
     by_route = Counter(v["route"] or "unknown" for v in requests.values())
     phrases = Counter(v["utterance"].casefold().strip(" .,!?") for v in requests.values()
                       if v["utterance"])
+    request_values = list(requests.values())
+    elapsed = [v["elapsed_ms"] for v in request_values
+               if v["route"] == "llm" and isinstance(v["elapsed_ms"], (int, float))]
+    quality = {
+        "asr_text_present": sum(bool(v["utterance"]) for v in request_values),
+        "asr_text_missing": sum(not v["utterance"] for v in request_values),
+        "asr_empty_event": sum("transcript" in v["events"] and not v["utterance"] for v in request_values),
+        "asr_no_event": sum("transcript" not in v["events"] for v in request_values),
+        "recorded_responses_delivered": sum(v["delivered"] for v in request_values),
+        "responses_not_in_journal": sum("response" not in v["events"] for v in request_values),
+        "cancel_events": events["cancel"],
+        "truncated_requests": sum(v["truncated"] for v in request_values),
+        "llm_response_elapsed_ms": {
+            "samples": len(elapsed),
+            "mean": round(statistics.mean(elapsed)) if elapsed else None,
+            "median": round(statistics.median(elapsed)) if elapsed else None,
+            "minimum": min(elapsed) if elapsed else None,
+            "maximum": max(elapsed) if elapsed else None,
+        },
+    }
     return {
         "event_count": len(records), "skipped_lines": skipped,
-        "request_count": len(requests), "events_by_type": dict(events),
+        "request_count": len(request_values), "events_by_type": dict(events),
         "routes": dict(by_route), "command_frequency": phrases.most_common(),
-        "requests": list(requests.values()),
+        "quality": quality, "requests": request_values,
     }
 
 
@@ -127,6 +148,20 @@ def render(result: dict, last: int, no_text: bool) -> str:
         "Маршруты: " + ", ".join(f"{k}={v}" for k, v in result["routes"].items()),
         "Типы событий: " + ", ".join(f"{k}={v}" for k, v in result["events_by_type"].items()),
     ]
+    q = result["quality"]
+    timing = q["llm_response_elapsed_ms"]
+    lines.append(
+        f"Полнота: текст ASR {q['asr_text_present']}/{result['request_count']}; "
+        f"без текста {q['asr_text_missing']} (пустое ASR-событие "
+        f"{q['asr_empty_event']}, нет ASR-события {q['asr_no_event']}); "
+        f"ответов с delivered=true "
+        f"{q['recorded_responses_delivered']}; ответов нет в журнале "
+        f"{q['responses_not_in_journal']}; cancel-событий {q['cancel_events']}"
+    )
+    if timing["samples"]:
+        lines.append(f"Время до записанного LLM-ответа: среднее {timing['mean']} мс, "
+                     f"медиана {timing['median']} мс, минимум {timing['minimum']} мс, "
+                     f"максимум {timing['maximum']} мс (n={timing['samples']}).")
     lines.append("Частые фразы (по запросам):")
     for phrase, count in result["command_frequency"][:10]:
         if phrase:

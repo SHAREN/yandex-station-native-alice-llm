@@ -35,6 +35,13 @@ class JournalReportTests(unittest.TestCase):
         self.assertEqual(result["requests"][0]["elapsed_ms"], 510)
         self.assertIsNone(result["requests"][1]["utterance"])
         self.assertEqual(result["command_frequency"], [("включи свет", 1)])
+        self.assertEqual(result["quality"]["asr_text_present"], 1)
+        self.assertEqual(result["quality"]["asr_text_missing"], 1)
+        self.assertEqual(result["quality"]["asr_empty_event"], 1)
+        self.assertEqual(result["quality"]["asr_no_event"], 0)
+        self.assertEqual(result["quality"]["responses_not_in_journal"], 1)
+        self.assertEqual(result["quality"]["recorded_responses_delivered"], 1)
+        self.assertEqual(result["quality"]["llm_response_elapsed_ms"]["median"], 510)
 
     def test_invalid_lines_skipped_not_executed(self):
         records, skipped = parse_jsonl(b'{"event":"request","request":"a"}\nnot json\n{"foo": 2}\n')
