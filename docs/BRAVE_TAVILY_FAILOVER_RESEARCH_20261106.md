@@ -1,0 +1,70 @@
+# Brave Search + Tavily: приоритет, резервирование и бесплатные квоты
+
+Исследование 06.11.2026. **Не развёрнуто на физической колонке.** Исходный голосовой тракт, прошивка, ASR, TTS, Quasar Bridge runtime и настройки HA/Yaha Cloud не менялись.
+
+## Вывод для голосового ассистента
+
+**Brave Search API Search plan → LLM Context — основной.** Индекс Brave независимый, поисковый endpoint специально выдаёт уже извлечённые текстовые фрагменты с URL/источниками, фильтры релевантности, token budget, региональные параметры, новости/видео/картинки/места через смежные API, собственный Goggles reranking. Для коротких голосовых ответов запрашивать до 6 источников, около 3072 токенов контекста и отдать их в уже имеющуюся LLM. Важно: **Brave Answers — другой, отдельно тарифицируемый продукт, его не включаем**.
+
+**Tavily Basic — автоматический резерв** при исчерпании квоты Brave, длительном сетевом сбое и пустой выдаче. Tavily особенно полезен для сложных research/Extract/Crawl/Map, доменных фильтров, news/finance topic; у него есть `fast` и `ultra-fast` за 1 кредит, но без реального A/B на русскоязычных запросах нельзя заранее объявлять их хуже/лучше Brave LLM Context. `advanced` — 2 кредита, включать только осознанно и не в основном бесплатном голосовом режиме.
+
+**Два провайдера — один поиск для LLM.** Нельзя давать модели отдельно два MCP инструмента `brave_search` и `tavily_search` без общей политики: модель может вызвать оба и потратить оба бесплатных пакета. Нужен единый внешний поисковый инструмент, который сам выбирает поставщика.
+
+## Лимиты/стоимость на 06.11.2026
+
+| | Brave Search plan | Tavily Researcher |
+| --- | --- | --- |
+| Бесплатно | $5 кредитов **каждый месяц** | 1 000 кредитов **каждый месяц**, сброс 1-го числа |
+| Basic вызовы | $5 / 1 000 запросов = примерно 1 000 запросов в пределах бесплатных $5 | Basic, Fast, Ultra-fast: 1 кредит; Advanced: 2 |
+| Карта | Требуется даже при нулевой оплате (anti-fraud) | Не нужна |
+| Как не платить | Prepaid balance $0, **auto-reload OFF**, usage/spend limit на плане | Free Researcher, **Pay-as-you-go OFF** |
+| После лимита | 0 balance / QUOTA_LIMITED — остановка без топ-апа | 432 Plan Limit Exceeded или 433 PAYG Limit Exceeded |
+| Всплеск нагрузки | HTTP 429 `RATE_LIMITED` — временная скорость, НЕ месячная квота | HTTP 429 — кратковременная скорость, НЕ месячная квота |
+| Проверка | `X-RateLimit-Limit/Remaining/Reset` (разные окна) и `error.code` | `usage.credits` и коды HTTP/дашборд |
+| Дополнительно | Токены собственной LLM отдельно, хранение результатов ограничено лицензией | Токены собственной LLM отдельно, Extract/Crawl/Map/Research расходуют кредиты отдельно |
+
+Оценка ~2 000 бесплатных поисков/мес. возможна **только** при 1 Brave LLM Context и 1 Tavily Basic за единицу, без дополнительных Extract/Research, при доступных сервисах и без включённых платных режимов. Это число **не** означает 2 000 сложных исследований; оба могут расходовать больше единицы в расширенных режимах.
+
+**Brave юридически запрещает долговременно хранить/кэшировать поисковые результаты**, кроме временного использования, необходимого для ответа в приложении. Не добавлять найденные страницы в тридцатидневный журнал диалогов. В логах сохранять только `provider/status/duration/quota/fallback`, без фрагментов страниц и API-ключей. Ссылки/фрагменты передаются модели только на текущий запрос. Перед запуском и при смене тарифа проверить актуальные условия.
+
+## Реализованный (но ещё не подключённый) router
+
+Модуль `src/quasar-bridge/internal/assistant/searchrouter/router.go` в существующем каноническом репозитории. Никаких внешних Go-библиотек и новых процессов. `Router.Search(ctx, Query{Text: ..., Freshness: ...})` выполняет:
+
+1. Сначала `Brave LLM Context` с `search_lang=ru`, тестовым `country=RU` (проверить этот код на *живом* аккаунте!), `maximum_number_of_tokens=3072`, `maximum_number_of_urls=6`. Отдельно ограничивает сетевое ожидание каждого провайдера 5 с.
+2. При `QUOTA_LIMITED` отключает Brave до сброса по `X-RateLimit-Reset` или месячному резервному сроку и переходит на Tavily. Понимает `RATE_LIMITED` как кратковременный 429 с одной короткой повторной попыткой. При временной ошибке/пустой выдаче тоже допускает Tavily как резерв без отметки `месячный лимит`.
+3. `Tavily` запрашивается с `search_depth=basic`, `country=russia`, `language=ru`, `include_usage=true`, `auto_parameters=false` (чтобы не повысить стоимость тайно). 432/433 помечает исчерпание до 1-го числа следующего месяца; 429 — только временное превышение скорости.
+4. `Status()` показывает только технические метрики и период ограничения. Сырые ответы не записываются в файлы и не сохраняются в истории. Учёт отключения хранится в оперативной памяти, а не на флеше колонки: после перезапуска первый запрос может снова проверить Brave и получить отказ, затем переключится.
+5. Чистые юнит-тесты на поддельных HTTP-серверах проверяют Brave-primary, месячную квоту и возврат после сброса, Tavily 432, пустую выдачу, отсутствие дублирующих вызовов и сохранения поискового контента.
+
+**В проекте сейчас нет рабочего API-ключа Brave/Tavily в доступном Home PC WSL environment.** Обнаружение только по именам, значения не читались. Без ключей нет реального прогона сервисов (RU качество/точность/TTFT), нет готового endpoint и **нет активного поиска на колонке**. Модуль ещё не подключён к инструментальному каталогу LLM и не установлен в runtime.
+
+Важное ограничение: текущий Quasar Bridge `assistant_tools.enabled=false` и native streaming TTS от Chat Completions. Нельзя ради поиска вслепую включать ассистентский tool-loop, если он нарушает быстрый streaming TTS. Безопаснее вынести search-router за пределы станции (VPS Renat), API-ключи и биллинг оставить там и в Quasar Bridge добавить **один** инструмент `web_search` после тестирования совместимости с обычным streaming. Не создавать отдельный TTS или STT.
+
+## Как проверить качество после выдачи API-ключей
+
+Одинаковые ~20 запросов с устройства/серверного узла, где будет работать поиск; не полагаться на рекламные цифры:
+- Российские сайты: «новости Октябрьского Башкортостан сегодня», «выходные в Башкортостане», «новый тариф Билайн кэшбэк».
+- Актуальные темы: «новости OpenAI за неделю», «курс валют», «изменения Home Assistant 2026.11».
+- Технические: «Quasar Bridge UniProxy», «Yandex Station Extended LED protocol», «zigbee2mqtt supported color modes».
+- Форумы: «прошивка Яндекс Станции Lite 1 отзывы», точные фразы из GitHub, Reddit/TG (Telegram закрытые чаты не являются публичным поисковым индексом).
+- Негативные проверки: устаревшие статьи выше свежих, непроверенные утверждения, неверный регион, пустые ответы.
+
+Снимать отдельно: качество источников (попадание первоисточников, свежесть, русский), HTTP p50/p95, **время до первого звука** на колонке, полную задержку, число API вызовов, fallback и стоимость. Слепо отключать Brave ради одного плохого ответа нельзя: лучше уточняющий запрос или Tavily, если явно недостаточно источников.
+
+## Официальные источники
+
+- Brave pricing: https://brave.com/search/api/
+- Brave LLM Context: https://api-dashboard.search.brave.com/documentation/services/llm-context
+- Brave rate limits: https://api-dashboard.search.brave.com/documentation/guides/rate-limiting
+- Brave errors/quota: https://api-dashboard.search.brave.com/api-reference/ai/llm_context/post
+- Brave free credits, anti-fraud card, storage restrictions: https://api-dashboard.search.brave.com/documentation/resources/help-feedback
+- Brave license: https://api-dashboard.search.brave.com/documentation/resources/terms-of-service
+- Tavily pricing: https://www.tavily.com/pricing
+- Tavily credits: https://docs.tavily.com/documentation/api-credits
+- Tavily search API: https://docs.tavily.com/documentation/api-reference/endpoint/search
+- Tavily error codes: https://help.tavily.com/articles/8645538886-understanding-http-errors
+- Independent docs retrieval benchmark May 2026: https://agentfirsttools.com/benchmarks/official-docs-search-api-may-2026/
+- Third-party September 2026 1k SimpleQA benchmark: https://benchology.co/benchmark/search-apis/2026-09/
+
+**Ограничение сравнений:** опубликованные бенчмарки часто сравнивают Brave Web Search, а не LLM Context, с Tavily Basic/Advanced, и измеряют сеть из другой страны. Они поддерживают выбор Brave для первого A/B, **но не доказывают**, что Brave LLM Context обязательно быстрее Tavily `fast` или `ultra-fast` в России.
