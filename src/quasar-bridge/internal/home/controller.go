@@ -26,6 +26,7 @@ type Controller struct {
 	Tools        ToolCaller
 	Planner      Planner
 	Domains      []string
+	FastTargets  map[string]string // Explicit runtime allowlist; absent/empty disables fast intents.
 	exposureMu   sync.Mutex
 	guideMu      sync.Mutex
 	guidesLoaded bool

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"quasarbridge/internal/home/fastintent"
 	"quasarbridge/internal/llm"
 	"quasarbridge/internal/playback"
 	"quasarbridge/internal/webaddress"
@@ -24,6 +25,13 @@ type StreamingCompleter interface {
 }
 type HomeHandler interface {
 	Handle(context.Context, string) (string, error)
+}
+
+// FastHomeHandler is optional; the stock path remains unchanged if absent.
+// It acts only on a fully validated final ASR phrase and an explicit HA allowlist.
+type FastHomeHandler interface {
+	CanFastHandle(fastintent.Intent) bool
+	FastHandle(context.Context, fastintent.Intent) (string, error)
 }
 type PlaybackController interface {
 	Active(context.Context) bool
@@ -122,6 +130,19 @@ func (e *Engine) ResolveDecision(ctx context.Context, text string, decision Rout
 	case "home":
 		if e.Home == nil {
 			return Resolution{Route: "yandex"}, nil
+		}
+		if decision.Source == "fast_intent" {
+			fast, ok := e.Home.(FastHomeHandler)
+			if !ok {
+				return result, errors.New("fast home controller unavailable")
+			}
+			intent, valid := fastintent.Match(text)
+			if !valid || !fast.CanFastHandle(intent) {
+				return result, errors.New("fast home intent rejected")
+			}
+			answer, err := fast.FastHandle(ctx, intent)
+			result.Answer = answer
+			return result, err
 		}
 		answer, err := e.Home.Handle(ctx, text)
 		result.Answer = answer
@@ -252,6 +273,20 @@ func (e *Engine) RoutingStatus() RoutingStatus {
 	return RoutingStatus{Revision: p.revision, ActiveRules: len(p.rules)}
 }
 
+// MatchFastIntent runs before any LLM classifier, including in forced Quasar
+// voice mode. Missing config, unknown rooms and unsupported devices return false.
+func (e *Engine) MatchFastIntent(text string) (RouteDecision, bool) {
+	fast, ok := e.Home.(FastHomeHandler)
+	if !ok {
+		return RouteDecision{}, false
+	}
+	intent, matched := fastintent.Match(text)
+	if !matched || !fast.CanFastHandle(intent) {
+		return RouteDecision{}, false
+	}
+	return RouteDecision{Route: "home", Rule: "fast_light_intent", Source: "fast_intent"}, true
+}
+
 func (e *Engine) MatchExplicitRule(text string) (RouteDecision, bool) {
 	return e.policy().match(text)
 }
@@ -278,6 +313,9 @@ func (e *Engine) Decide(ctx context.Context, text string) (decision RouteDecisio
 	}
 	if e.Playback != nil && playback.Command(text) != "" && e.Playback.Active(ctx) {
 		return RouteDecision{Route: "playback", Source: "playback"}
+	}
+	if d, ok := e.MatchFastIntent(text); ok {
+		return d
 	}
 	if d, ok := p.match(text); ok {
 		if d.Route == "llm" && e.Music != nil && e.Music.CanStartMusic(text) {

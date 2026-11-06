@@ -47,6 +47,11 @@ type ExplicitRuleResolver interface {
 	MatchExplicitRule(string) (RouteDecision, bool)
 }
 
+// Optional deterministic short-command matcher, before the forced Quasar LLM.
+type FastIntentResolver interface {
+	MatchFastIntent(string) (RouteDecision, bool)
+}
+
 type FallbackResolver interface {
 	Fallback(context.Context, string) (Resolution, error)
 }
@@ -960,12 +965,23 @@ func (n *Native) maybeResolve(p *nativeRequest) {
 		if n.resolver != nil && strings.TrimSpace(text) != "" {
 			if p.forceLLM {
 				nativeHandled := false
-				if matcher, matchOK := n.resolver.(ExplicitRuleResolver); matchOK {
-					if decision, matched := matcher.MatchExplicitRule(text); matched && decision.Route == "yandex" {
+				if matcher, matchOK := n.resolver.(FastIntentResolver); matchOK {
+					if decision, matched := matcher.MatchFastIntent(text); matched {
 						if routed, routeOK := n.resolver.(RoutedResolver); routeOK {
-							slog.Info("native_route_decision", "request", requestTag(p.id), "route", "yandex", "source", "quasar_native_rule", "rule", decision.Rule)
+							slog.Info("native_route_decision", "request", requestTag(p.id), "route", decision.Route, "source", "fast_intent", "rule", decision.Rule)
 							result, err = routed.ResolveDecision(p.ctx, text, decision)
 							nativeHandled = true
+						}
+					}
+				}
+				if !nativeHandled {
+					if matcher, matchOK := n.resolver.(ExplicitRuleResolver); matchOK {
+						if decision, matched := matcher.MatchExplicitRule(text); matched && decision.Route == "yandex" {
+							if routed, routeOK := n.resolver.(RoutedResolver); routeOK {
+								slog.Info("native_route_decision", "request", requestTag(p.id), "route", "yandex", "source", "quasar_native_rule", "rule", decision.Rule)
+								result, err = routed.ResolveDecision(p.ctx, text, decision)
+								nativeHandled = true
+							}
 						}
 					}
 				}
