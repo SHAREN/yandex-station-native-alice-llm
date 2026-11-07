@@ -64,6 +64,8 @@ bash tools/go-cross-build.sh src/quasar-bridge _tmp/quasar-bridge-native-arm64 .
 
 История подтверждённого root, заводской прошивки, OTA, SSH, блокировки обновлений и откатов: [ROOT_AND_FIRMWARE_FIELD_HISTORY_20261108](docs/ROOT_AND_FIRMWARE_FIELD_HISTORY_20261108.md).
 
+Карта всех смежных проектов, проверенных фактов и ещё не законченных исследований: [PROJECT_MAP_AND_EVIDENCE_20261108](docs/PROJECT_MAP_AND_EVIDENCE_20261108.md).
+
 Подробности: [CURRENT_STATE](docs/CURRENT_STATE.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [REPOSITORY_SEPARATION](docs/REPOSITORY_SEPARATION.md), [NATIVE_TTS_CUTOVER](docs/NATIVE_TTS_CUTOVER_20261104.md).
 
 ## Происхождение и лицензии
