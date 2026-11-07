@@ -18,6 +18,10 @@ Before adding a feature inspect the physical firmware/protocol for existing impl
 - Windows/WSL: use tools/go-cross-build.sh for ARM64 Linux build. Go module is under src/quasar-bridge.
 - Never create/start/resume/steer Codex Threads without explicit authorization from the user in the current message.
 
+## Station storage hard gate (owner policy, 07.11.2026)
+
+Before **every** station write, release, rollback or large staging, read local Home PC `D:\codexpro_workspace\runbooks\yandex-stations\STATION_STORAGE_POLICY.md` and run `runbooks/yandex-stations/check-room-storage.cmd --json` or WSL `./ps-file runbooks/yandex-stations/check-room-storage.ps1 -Json`. Stage new binaries **only in /tmp** temporarily; verify SHA and save current release/rollback **off-speaker** to Home PC/Home Server first. No retained `*.bak`, `.before`, rollback tarballs, duplicated binary or archives on persistent `/data` (`/bkupgrade`) or `/tmp`. Target post-change >=25 MiB UBI free; WARN below 25 MiB or >=75% used, CRIT below 15 MiB or >=85% used. Do not continue deployment if the storage preflight fails; do not auto-delete unclassified files. The tiny `endpoint-backup.json` is an ACTIVE stock fail-open dependency referenced by S98zzbetteryam, not an archival backup: keep it. As of 07.11.2026, 33 old backups moved to private Home PC archive and verified, /bkupgrade 55% used (~37.6 MiB free). Any release script requiring a former /tmp rollback must obtain and verify the external copy first.
+
 ## Conversation journal for agents
 - To inspect real dialogue history, use the **read-only** `tools/alice-journal.cmd --last 20` on native Windows; add `--json` to pass structured results to another agent. Script: `tools/alice_journal_report.py`; on WSL it supports `--stdin` from the existing `alice-room` helper. Never publish raw conversations in Git.
 - Existing speaker-side ring buffer is ~3 MB (1 MB current + 2 backups), **not a guaranteed 30-day archive**. Fastcommands without wake-word are not yet part of the Quasar JSONL; never infer their frequency from that file alone.

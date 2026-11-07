@@ -1,7 +1,11 @@
 #!/bin/sh
 # Rollback for Lite 1 native sentence-driven TTS build, 2026-11-05.
 # Run on the station as root; does not modify the stock maind firmware.
-# Requires the verified /tmp/quasar-bridge-0.4.5f.gz backup.
+# Storage policy 07.11.2026: the rollback archive is kept on Home PC, NOT
+# on the station. Before an intentional rollback, securely restore the verified
+# quasar-bridge-0.4.5f.gz from the private Home PC archive temporarily into
+# /tmp, check its known SHA256, and remove it from /tmp after successful recovery.
+# This script MUST fail closed if that temporary staged file is absent.
 set -u
 
 state=/data/opt/quasar-bridge
@@ -17,6 +21,10 @@ connected() { netstat -ant 2>/dev/null | grep 8443 | grep -q ESTABLISHED; }
 if [ "$(hash "$binary")" != "$newsha" ]; then
   echo "ABORT: unexpected installed binary; leave it unchanged"
   exit 2
+fi
+if [ ! -s "$backup" ]; then
+  echo "ABORT: rollback is archived off-speaker on Home PC; restore the SHA-verified file temporarily to /tmp first"
+  exit 3
 fi
 if [ "$(gzip -dc "$backup" | sha256sum | cut -d' ' -f1)" != "$oldsha" ]; then
   echo "ABORT: backup is missing or has unexpected SHA256"
@@ -59,6 +67,8 @@ fi
 echo "RESTORED_SHA $(hash "$binary")"
 echo "HEALTH $(wget -q -T 2 -O - http://127.0.0.1:8443/healthz 2>/dev/null || true)"
 if connected; then
+  # The rollback image is an ephemeral transfer; never retain it on the speaker.
+  rm -f "$backup"
   echo PRODUCTION_0_4_5F_RESTORED
   exit 0
 fi
