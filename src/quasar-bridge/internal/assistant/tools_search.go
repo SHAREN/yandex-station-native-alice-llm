@@ -19,11 +19,18 @@ func (t *Tools) webSearchRouter() *searchrouter.Router {
 		if t.SearchRouter != nil {
 			return // Explicitly injected mock/proxy for tests.
 		}
-		if !t.Config.Search || os.Getenv("QUASAR_SEARCH_ENABLED") != "1" {
+		if !t.Config.Search || os.Getenv("QUASAR_SEARCH_ENABLED") == "0" {
 			return
 		}
 		brave := strings.TrimSpace(os.Getenv("BRAVE_SEARCH_API_KEY"))
 		tavily := strings.TrimSpace(os.Getenv("TAVILY_API_KEY"))
+		// Root-only station deployment keeps credentials outside the JSON config,
+		// git, CLI flags, and service shell. Never expose values in logs/errors.
+		if brave == "" && tavily == "" {
+			fromFile := readStationSearchKeys("/data/opt/secrets/web-search.env")
+			brave = fromFile["BRAVE_SEARCH_API_KEY"]
+			tavily = fromFile["TAVILY_API_KEY"]
+		}
 		if brave == "" && tavily == "" {
 			return
 		}

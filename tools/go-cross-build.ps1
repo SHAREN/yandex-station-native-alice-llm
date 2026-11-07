@@ -4,7 +4,8 @@ param(
     [string]$Package = '.',
     [string]$GoOs = 'linux',
     [string]$GoArch = 'arm64',
-    [string]$GoExePath = ''
+    [string]$GoExePath = '',
+    [switch]$Strip
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,7 +25,10 @@ $env:CGO_ENABLED = '0'
 $env:GOTOOLCHAIN = 'local'
 
 Remove-Item -Force -ErrorAction SilentlyContinue $Output,($Output + '.exe')
-$proc = Start-Process -FilePath $GoExe -ArgumentList @('build','-trimpath','-o',$Output,$Package) -WorkingDirectory $SourceDir -NoNewWindow -Wait -PassThru
+$buildArgs = @('build','-trimpath')
+if ($Strip) { $buildArgs += '-ldflags="-s -w"' }
+$buildArgs += @('-o',$Output,$Package)
+$proc = Start-Process -FilePath $GoExe -ArgumentList $buildArgs -WorkingDirectory $SourceDir -NoNewWindow -Wait -PassThru
 if ($proc.ExitCode -ne 0) { throw "go build failed with exit code $($proc.ExitCode)" }
 if (-not (Test-Path $Output)) { throw "Build succeeded but output is missing: $Output" }
 Get-Item $Output | Select-Object FullName,Length,LastWriteTime
