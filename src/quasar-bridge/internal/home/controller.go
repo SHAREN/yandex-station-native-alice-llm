@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -64,6 +65,30 @@ var serviceFields = map[string][]string{
 	"fan.turn_on": {"percentage"}, "fan.turn_off": {}, "fan.set_percentage": {"percentage"},
 	"vacuum.start": {}, "vacuum.pause": {}, "vacuum.stop": {}, "vacuum.return_to_base": {},
 	"media_player.turn_off": {}, "media_player.media_pause": {}, "media_player.media_stop": {}, "media_player.volume_set": {"volume_level"},
+}
+
+// homeLightActionAllowed requires an explicit list of light entity IDs from the
+// root-only runtime environment. Missing or malformed configuration is read-only.
+// Non-light devices, including power-feed switches, can never be actuated here.
+func homeLightActionAllowed(entityID string) bool {
+	if !strings.HasPrefix(entityID, "light.") {
+		return false
+	}
+	raw := os.Getenv("QUASAR_HOME_LIGHT_ACTIONS")
+	if raw == "" || len(raw) > 2048 {
+		return false
+	}
+	matched := false
+	for _, item := range strings.Split(raw, ",") {
+		allowed := strings.TrimSpace(item)
+		if len(allowed) < len("light.")+1 || !strings.HasPrefix(allowed, "light.") || strings.ContainsAny(allowed, " \t\r\n;*?") {
+			return false
+		}
+		if allowed == entityID {
+			matched = true
+		}
+	}
+	return matched
 }
 
 func (c *Controller) Entities(ctx context.Context) ([]Entity, error) {
@@ -200,6 +225,9 @@ func (c *Controller) Handle(ctx context.Context, text string) (string, error) {
 		e, ok := known[a.EntityID]
 		if !ok || e.State == "unavailable" || e.State == "unknown" || !strings.HasPrefix(a.EntityID, a.Domain+".") || strings.ContainsAny(a.EntityID, ", \n\r") {
 			return "", errors.New("unknown or unavailable home target")
+		}
+		if !homeLightActionAllowed(a.EntityID) {
+			return "", errors.New("home action denied by light allowlist")
 		}
 		fields, ok := serviceFields[a.Domain+"."+a.Service]
 		if !ok {

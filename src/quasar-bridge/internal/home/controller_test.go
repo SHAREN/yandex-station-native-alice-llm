@@ -52,6 +52,7 @@ func (f *homeFixture) Call(ctx context.Context, name string, args map[string]any
 }
 
 func TestHomeValidatesTargetsAndConfirmsPhysicalState(t *testing.T) {
+	t.Setenv("QUASAR_HOME_LIGHT_ACTIONS", "light.office")
 	for _, tc := range []struct {
 		name, entity string
 		fail         bool
@@ -95,6 +96,7 @@ func TestLightingRequestInventoryIncludesSwitchesWithoutAllSensors(t *testing.T)
 }
 
 func TestHomeValidatesEntireBatchBeforeFirstAction(t *testing.T) {
+	t.Setenv("QUASAR_HOME_LIGHT_ACTIONS", "light.office")
 	fixture := &homeFixture{state: "off"}
 	c := Controller{Tools: fixture, Domains: []string{"light"}, Planner: plannerFunc(func(context.Context, []llm.Message, bool) (string, error) {
 		return `{"answer":"","actions":[{"domain":"light","service":"turn_on","entity_id":"light.office","data":{}},{"domain":"light","service":"turn_on","entity_id":"light.missing","data":{}}]}`, nil
@@ -130,6 +132,7 @@ func (f toolFunc) Call(ctx context.Context, name string, args map[string]any) (j
 	return f(ctx, name, args)
 }
 func TestHomeRejectsDuplicateAndGroupMemberActions(t *testing.T) {
+	t.Setenv("QUASAR_HOME_LIGHT_ACTIONS", "light.office,light.member")
 	for _, second := range []string{"light.office", "light.member"} {
 		t.Run(second, func(t *testing.T) {
 			actions := 0
@@ -171,6 +174,40 @@ func TestHomeWarmNeverPlansOrActuates(t *testing.T) {
 	})}
 	if err := c.Warm(t.Context(), "Кабинет"); err != nil || f.actions != 0 {
 		t.Fatalf("err=%v actions=%d", err, f.actions)
+	}
+}
+
+func TestHomeLightActionsRequireExactRuntimeAllowlist(t *testing.T) {
+	for _, tc := range []struct {
+		name, config, target string
+		allowed              bool
+	}{
+		{"missing", "", "light.office", false},
+		{"exact", "light.office", "light.office", true},
+		{"multiple", "light.desk, light.office", "light.office", true},
+		{"partial", "light.office", "light.office_extra", false},
+		{"other_light", "light.desk", "light.office", false},
+		{"technical_switch", "switch.technical_power,light.office", "switch.technical_power", false},
+		{"malformed", "light.office,,light.desk", "light.office", false},
+		{"wildcard", "light.*", "light.office", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("QUASAR_HOME_LIGHT_ACTIONS", tc.config)
+			if got := homeLightActionAllowed(tc.target); got != tc.allowed {
+				t.Fatalf("allowed=%v want=%v", got, tc.allowed)
+			}
+		})
+	}
+}
+
+func TestHomeWithoutActionAllowlistNeverCallsService(t *testing.T) {
+	t.Setenv("QUASAR_HOME_LIGHT_ACTIONS", "")
+	f := &homeFixture{state: "off"}
+	c := Controller{Tools: f, Domains: []string{"light"}, Planner: plannerFunc(func(context.Context, []llm.Message, bool) (string, error) {
+		return `{"answer":"Готово","actions":[{"domain":"light","service":"turn_on","entity_id":"light.office","data":{}}]}`, nil
+	})}
+	if _, err := c.Handle(t.Context(), "Включи свет"); err == nil || f.actions != 0 {
+		t.Fatalf("error=%v physical actions=%d", err, f.actions)
 	}
 }
 
