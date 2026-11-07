@@ -58,7 +58,11 @@ bash tools/go-cross-build.sh src/quasar-bridge _tmp/quasar-bridge-native-arm64 .
 
 ## Текущее состояние
 
-На колонке установлен Quasar Bridge **0.4.5f** с исправленным native streaming TTS: **весь текст с первого символа** поступает через `DeferredTtsGenerate` в одну сессию; старые независимые синтезы и Ogg-склейка при включённом флаге не используются. Предыдущая 0.4.5e сохранена для отката. Тесты прошли; физическая прослушка остаётся критерием приёмки. [Разбор пропуска начала речи](docs/NATIVE_TTS_STREAMING_BUGFIX_20261104.md).
+Рабочая версия на физической Lite 1 — **`sentence-tts-20261105`** (коммит [`ae4ff5a`](https://github.com/SHAREN/yandex-station-native-alice-llm/commit/ae4ff5af5db3d246fbdc22625e46ee3790af27e4)). Нативный streaming TTS посылает первый смысловой фрагмент и затем предложения через одну UniProxy TTS-сессию. Пользователь подтвердил плавность озвучки **05.11.2026**. Ранние сборки 0.4.5e/0.4.5f — история и варианты отката, **не текущая рабочая версия**.
+
+После уборки 07.11 старые бинарники и rollback-архивы **не хранятся на колонке**: проверенные копии находятся на Home PC; инструкции, предполагающие `/tmp/quasar-bridge-0.4.5f.gz`, устарели. Поиск Brave/Tavily и прямой Home Assistant на 07.11 подготовлены, но **не включены в production**. Подробности — [состояние](docs/CURRENT_STATE.md) и [ограничения релиза](docs/SEARCH_HA_RELEASE_GATE_20261107.md).
+
+История подтверждённого root, заводской прошивки, OTA, SSH, блокировки обновлений и откатов: [ROOT_AND_FIRMWARE_FIELD_HISTORY_20261108](docs/ROOT_AND_FIRMWARE_FIELD_HISTORY_20261108.md).
 
 Подробности: [CURRENT_STATE](docs/CURRENT_STATE.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [REPOSITORY_SEPARATION](docs/REPOSITORY_SEPARATION.md), [NATIVE_TTS_CUTOVER](docs/NATIVE_TTS_CUTOVER_20261104.md).
 
